@@ -3,7 +3,7 @@ module github.com/lemmego/mcp
 go 1.27
 
 require (
-	github.com/lemmego/api v0.7.1
+	github.com/lemmego/api v0.7.2
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/spf13/cobra v1.8.1
 )
