@@ -141,6 +141,20 @@ Writes, per agent:
 Agents: `claude-code`, `cursor`, `codex`, `copilot`, `windsurf`. Narrow with
 `--agent`, and skip parts with `--no-skills`, `--no-rules`, `--no-guidelines`.
 
+### Installing does not create the server
+
+Writing an editor's configuration and *having* a server are different things,
+and only the first is the installer's doing.
+
+`lemmego new` registers the provider for you. An **existing** project has
+nobody to do it: Go has no equivalent of Composer's package auto-discovery,
+which is what lets Laravel's installer assume the server is there. So
+`mcp:install` checks for both halves — the module in `go.mod` and the provider
+in `bootstrap/providers.go` — and prints exactly what is missing.
+
+Without that check it wrote a perfectly good `.mcp.json` pointing at a command
+that did not exist, and the editor showed a red cross with no reason given.
+
 **Only the marked block of a guideline file is replaced.** `CLAUDE.md` is a
 file people write in by hand, and a tool that overwrote it would lose their
 work. Everything outside `<!-- BEGIN lemmego-guidelines -->` and its `END`

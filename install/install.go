@@ -97,6 +97,11 @@ type Options struct {
 type Result struct {
 	Written []string
 	Skipped []string
+
+	// Wiring reports whether the project can actually serve MCP. Writing the
+	// configuration and having a server are different things, and only the
+	// first is this package's doing.
+	Wiring ServerWiring
 }
 
 // The markers that bound this tool's section of a shared guideline file.
@@ -171,6 +176,7 @@ func Run(opts Options) (Result, error) {
 	// more than once and would otherwise be reported three times, once as
 	// written and twice as current. Deduplicated with written winning,
 	// because "this changed" is the truth a reader needs.
+	result.Wiring = DetectServerWiring(opts.Dir)
 	result.Written = unique(result.Written)
 	result.Skipped = without(unique(result.Skipped), result.Written)
 	sort.Strings(result.Written)

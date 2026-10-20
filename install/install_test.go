@@ -312,3 +312,85 @@ func TestResultReportsEachPathOnce(t *testing.T) {
 		}
 	}
 }
+
+// Configuring an editor and having a server are different things. Without this
+// check the installer wrote a perfectly good .mcp.json pointing at a command
+// that does not exist, and the editor showed a red cross with no reason —
+// which is exactly what happened on the first real project it was run in.
+func TestDetectServerWiringReportsAProjectThatCannotServe(t *testing.T) {
+	dir := project(t, exampleGoMod) // no mcp requirement, no providers.go
+
+	wiring := install.DetectServerWiring(dir)
+	if wiring.ModuleRequired {
+		t.Error("reported the module as required when go.mod does not have it")
+	}
+	if wiring.ProviderRegistered {
+		t.Error("reported the provider as registered with no providers.go")
+	}
+	if wiring.Complete() {
+		t.Error("Complete() is true for a project that cannot serve")
+	}
+}
+
+func TestDetectServerWiringRecognisesAWiredProject(t *testing.T) {
+	dir := project(t, exampleGoMod+"\nrequire github.com/lemmego/mcp v0.1.4\n")
+	if err := os.MkdirAll(filepath.Join(dir, "bootstrap"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	providers := "package bootstrap\n\nimport lemmegomcp \"github.com/lemmego/mcp\"\n\n" +
+		"func LoadProviders() []app.Provider {\n" +
+		"\tproviders := []app.Provider{}\n" +
+		"\tproviders = append(providers, &lemmegomcp.Provider{})\n\treturn providers\n}\n"
+	if err := os.WriteFile(filepath.Join(dir, "bootstrap", "providers.go"), []byte(providers), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	wiring := install.DetectServerWiring(dir)
+	if !wiring.ModuleRequired || !wiring.ProviderRegistered || !wiring.Complete() {
+		t.Errorf("a wired project was reported as incomplete: %+v", wiring)
+	}
+	if instructions := install.WiringInstructions(wiring); instructions != "" {
+		t.Errorf("instructions were produced for a working project:\n%s", instructions)
+	}
+}
+
+// The instructions are read at the moment the thing has just failed, so they
+// have to carry the actual commands rather than a link.
+func TestWiringInstructionsNameBothMissingPieces(t *testing.T) {
+	instructions := install.WiringInstructions(install.ServerWiring{})
+	for _, want := range []string{
+		"go get github.com/lemmego/mcp",
+		"bootstrap/providers.go",
+		"&lemmegomcp.Provider{}",
+		"lemmego run mcp:serve --help",
+		"restart",
+	} {
+		if !strings.Contains(instructions, want) {
+			t.Errorf("the instructions omit %q:\n%s", want, instructions)
+		}
+	}
+}
+
+// Only the missing half is instructed, or the reader has to work out which
+// step applies to them.
+func TestWiringInstructionsSkipWhatIsAlreadyDone(t *testing.T) {
+	instructions := install.WiringInstructions(install.ServerWiring{ModuleRequired: true})
+	if strings.Contains(instructions, "go get") {
+		t.Errorf("told the user to add a module they already have:\n%s", instructions)
+	}
+	if !strings.Contains(instructions, "&lemmegomcp.Provider{}") {
+		t.Errorf("did not mention the missing provider:\n%s", instructions)
+	}
+}
+
+// Run reports the wiring, so a command can warn without checking separately.
+func TestRunReportsTheWiring(t *testing.T) {
+	dir := project(t, exampleGoMod)
+	result, err := install.Run(install.Options{Dir: dir, Agents: []install.Agent{install.ClaudeCode}})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Wiring.Complete() {
+		t.Error("Run() reported a complete wiring for a project that cannot serve")
+	}
+}

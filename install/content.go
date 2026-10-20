@@ -293,3 +293,102 @@ func writeSkills(dir string, modules []string) ([]string, error) {
 	sort.Strings(written)
 	return written, nil
 }
+
+// ServerWiring reports whether a project can actually serve MCP.
+//
+// It exists because configuring an editor and having a server are two
+// different things, and only one of them is this package's doing. A project
+// scaffolded by `lemmego new` has the provider registered; an existing project
+// does not, and nothing in Go discovers it — there is no equivalent of
+// Composer's package auto-discovery, which is what lets Laravel's installer
+// assume the server is there.
+//
+// Without this check the installer wrote a perfectly good .mcp.json pointing
+// at a command that does not exist, and the editor showed a red cross with no
+// reason given.
+type ServerWiring struct {
+	// ModuleRequired reports whether go.mod requires github.com/lemmego/mcp.
+	ModuleRequired bool
+	// ProviderRegistered reports whether the provider appears in
+	// bootstrap/providers.go.
+	ProviderRegistered bool
+}
+
+// Complete reports whether the project will answer `lemmego run mcp:serve`.
+func (w ServerWiring) Complete() bool {
+	return w.ModuleRequired && w.ProviderRegistered
+}
+
+// DetectServerWiring inspects a project for the two things the server needs.
+//
+// Text matching rather than parsing: go.mod is read as text anyway for
+// ProjectModules, and providers.go is a file the project owns and may have
+// reshaped. A false positive here costs a redundant instruction; parsing it
+// properly would cost a dependency on go/ast in a package whose whole point is
+// that it has none.
+func DetectServerWiring(dir string) ServerWiring {
+	var wiring ServerWiring
+
+	if body, err := os.ReadFile(filepath.Join(dir, "go.mod")); err == nil {
+		wiring.ModuleRequired = strings.Contains(string(body), serverModulePath)
+	}
+
+	// The conventional location first, then a short search, because a project
+	// may have moved it.
+	candidates := []string{
+		filepath.Join(dir, "bootstrap", "providers.go"),
+		filepath.Join(dir, "bootstrap", "provider.go"),
+	}
+	for _, path := range candidates {
+		body, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		if strings.Contains(string(body), serverModulePath) {
+			wiring.ProviderRegistered = true
+			break
+		}
+	}
+	return wiring
+}
+
+const serverModulePath = "github.com/lemmego/mcp"
+
+// WiringInstructions is what to tell somebody whose project cannot serve yet.
+//
+// Written out in full rather than pointing at documentation, because this is
+// read at the moment the thing has just failed, and a link is one more step
+// between the person and a working editor.
+func WiringInstructions(wiring ServerWiring) string {
+	if wiring.Complete() {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("This project cannot serve MCP yet, so your editor will show the server as failed.\n")
+	b.WriteString("The configuration above is correct; the server itself is missing.\n\n")
+
+	step := 1
+	if !wiring.ModuleRequired {
+		fmt.Fprintf(&b, "%d. Add the module:\n\n     go get %s\n\n", step, serverModulePath)
+		step++
+	}
+	if !wiring.ProviderRegistered {
+		fmt.Fprintf(&b, "%d. Register the provider in bootstrap/providers.go, last in the list,\n", step)
+		b.WriteString("   so it reports on everything the providers above it register:\n\n")
+		b.WriteString("     import lemmegomcp \"github.com/lemmego/mcp\"\n\n")
+		b.WriteString("     func LoadProviders() []app.Provider {\n")
+		b.WriteString("         providers := []app.Provider{ /* ...existing... */ }\n\n")
+		b.WriteString("         // A development tool: it serves this application's configuration\n")
+		b.WriteString("         // and database to whatever starts it.\n")
+		b.WriteString("         if config.MustEnv(\"APP_ENV\", \"development\") != \"production\" {\n")
+		b.WriteString("             providers = append(providers, &lemmegomcp.Provider{})\n")
+		b.WriteString("         }\n")
+		b.WriteString("         return providers\n")
+		b.WriteString("     }\n\n")
+		step++
+	}
+	fmt.Fprintf(&b, "%d. Check it: lemmego run mcp:serve --help\n", step)
+	b.WriteString("   Then restart your editor.\n")
+	return b.String()
+}
