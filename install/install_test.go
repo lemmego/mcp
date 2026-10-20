@@ -283,3 +283,32 @@ func firstLines(s string, n int) string {
 	}
 	return strings.Join(lines, "\n")
 }
+
+// Several agents share a file — .mcp.json serves three of them and AGENTS.md
+// serves three — so a path must be reported once, and never as both written
+// and unchanged.
+func TestResultReportsEachPathOnce(t *testing.T) {
+	dir := project(t, exampleGoMod)
+
+	result, err := install.Run(install.Options{Dir: dir, Guidelines: true})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	seen := map[string]int{}
+	for _, path := range append(append([]string{}, result.Written...), result.Skipped...) {
+		seen[path]++
+	}
+	for path, count := range seen {
+		if count > 1 {
+			t.Errorf("%s reported %d times, want once", path, count)
+		}
+	}
+	for _, written := range result.Written {
+		for _, skipped := range result.Skipped {
+			if written == skipped {
+				t.Errorf("%s reported as both written and unchanged", written)
+			}
+		}
+	}
+}

@@ -166,9 +166,43 @@ func Run(opts Options) (Result, error) {
 		result.Written = append(result.Written, paths...)
 	}
 
+	// Several agents share a file — .mcp.json serves Claude Code, Copilot and
+	// Windsurf, and AGENTS.md serves three too — so the same path is touched
+	// more than once and would otherwise be reported three times, once as
+	// written and twice as current. Deduplicated with written winning,
+	// because "this changed" is the truth a reader needs.
+	result.Written = unique(result.Written)
+	result.Skipped = without(unique(result.Skipped), result.Written)
 	sort.Strings(result.Written)
 	sort.Strings(result.Skipped)
 	return result, nil
+}
+
+func unique(in []string) []string {
+	seen := make(map[string]bool, len(in))
+	out := make([]string, 0, len(in))
+	for _, item := range in {
+		if seen[item] {
+			continue
+		}
+		seen[item] = true
+		out = append(out, item)
+	}
+	return out
+}
+
+func without(in, exclude []string) []string {
+	excluded := make(map[string]bool, len(exclude))
+	for _, item := range exclude {
+		excluded[item] = true
+	}
+	out := make([]string, 0, len(in))
+	for _, item := range in {
+		if !excluded[item] {
+			out = append(out, item)
+		}
+	}
+	return out
 }
 
 // serverDefinition is how an editor is told to start the server.
