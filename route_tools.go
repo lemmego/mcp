@@ -3,40 +3,27 @@ package mcp
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"strings"
 
 	"github.com/lemmego/api/app"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// handlerBuilder is api's Bootstrapper.Handler, narrowed to the one method
-// this needs. Asserted rather than required, so a host that does not provide
-// it degrades to an explanation instead of a panic.
-type handlerBuilder interface {
-	Handler() http.Handler
-}
-
 // materialiseRouteTable makes the routing table readable from a CLI command.
 //
-// Route callbacks are invoked by serveHandler, which runs when the application
-// serves HTTP. `mcp:serve` is a console command, so nothing had registered a
-// route and list-routes reported an empty table on an application serving
-// dozens — which is worse than no tool, because an agent would conclude the
-// routes do not exist.
+// Route callbacks are invoked on the way to serving HTTP, and `mcp:serve` is a
+// console command — so nothing had registered a route and list-routes reported
+// an empty table on an application serving dozens, which is worse than no tool
+// because an agent reads it as "the routes do not exist".
 //
-// Handler() is the sanctioned way to get there: its own doc says it boots the
-// application and returns the handler Run would serve, without binding a port.
-// The handler is discarded; the side effect on the router is the point.
+// api v0.7.1 added PopulateRoutes for exactly this. The first attempt here
+// called Handler() instead, which re-runs the providers on an application that
+// has already booted and panics with "service already registered" — a real
+// crash, found by calling the tool rather than by reasoning about it.
 //
-// Once, because registerRoutes appends to the mux and calling it twice would
-// register everything again.
+// PopulateRoutes is itself idempotent; the Once only avoids the repeat call.
 func (s *Server) materialiseRouteTable() {
-	s.routesOnce.Do(func() {
-		if builder, ok := s.app.(handlerBuilder); ok {
-			_ = builder.Handler()
-		}
-	})
+	s.routesOnce.Do(s.app.PopulateRoutes)
 }
 
 type listRoutesInput struct {

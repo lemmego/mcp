@@ -29,8 +29,8 @@ github.com/inconshreveable/mousetrap v1.1.0 h1:wN+x4NVGpMsO7ErUn/mUI3vEoE6Jt13X2
 github.com/inconshreveable/mousetrap v1.1.0/go.mod h1:vpF70FUmC8bwa3OWnCshd2FqLfsEA9PFc4w1p2J65bw=
 github.com/joho/godotenv v1.5.1 h1:7eLL/+HRGLY0ldzfGMeQkb7vMd0as4CfYvUVzLqw0N0=
 github.com/joho/godotenv v1.5.1/go.mod h1:f4LDr5Voq0i2e/R5DDNOoa2zzDfwtkZa6DnEwAbqwq4=
-github.com/lemmego/api v0.7.0 h1:gntIrW0lryAJGDPDXDV5od4/0HG7RmPXrpKvJDmKCTk=
-github.com/lemmego/api v0.7.0/go.mod h1:k3j9LbIhmOgAQQs1+XHxpXk+dGKYjtWPLmvEJ37Jfa8=
+github.com/lemmego/api v0.7.1 h1:qmcnB2zCbw0kTr9D2DgLHZNsfVRJLglWrqgDk7EAou0=
+github.com/lemmego/api v0.7.1/go.mod h1:k3j9LbIhmOgAQQs1+XHxpXk+dGKYjtWPLmvEJ37Jfa8=
 github.com/lemmego/migration v0.2.0 h1:e4eE8L65ETE48rAhl8kcuu0PtdSvTFVxvqsMa/7Po40=
 github.com/lemmego/migration v0.2.0/go.mod h1:JNl9fUnUF9+tJ3hKGZftWoyaUrEh6rEn+jbOICpY8TY=
 github.com/lib/pq v1.10.9 h1:YXG7RB+JIjhP29X+OtkiDnYaXQwpS4JEWq7dtCCRUEw=
