@@ -3,6 +3,7 @@ package mcp
 import (
 	"fmt"
 	"net/url"
+	"reflect"
 	"strings"
 )
 
@@ -91,6 +92,59 @@ func redactURLCredentials(text string) (string, bool) {
 	return strings.Replace(parsed.String(), url.QueryEscape(Redacted), Redacted, 1), true
 }
 
+// asStringMap reports whether v is any map keyed by string, and returns it as
+// a plain map[string]any.
+//
+// Reflection rather than a type assertion, because the configuration is built
+// from config.M — a NAMED map type — and `v.(map[string]any)` does not match a
+// named type with that underlying type. A type switch missed every nested
+// subtree, so a password at sql.connections.pgsql.password passed through
+// unredacted while the test suite, which used plain maps, stayed green.
+//
+// Found by calling the tool against a real application and reading what came
+// back, which no unit test written in the same idiom as the code would have
+// caught.
+func asStringMap(v any) (map[string]any, bool) {
+	if direct, ok := v.(map[string]any); ok {
+		return direct, true
+	}
+	value := reflect.ValueOf(v)
+	if !value.IsValid() || value.Kind() != reflect.Map {
+		return nil, false
+	}
+	if value.Type().Key().Kind() != reflect.String {
+		return nil, false
+	}
+	out := make(map[string]any, value.Len())
+	iter := value.MapRange()
+	for iter.Next() {
+		out[iter.Key().String()] = iter.Value().Interface()
+	}
+	return out, true
+}
+
+// asSlice reports whether v is any slice or array, and returns its elements.
+//
+// Same reason as asStringMap: a named slice type would not match `[]any`.
+func asSlice(v any) ([]any, bool) {
+	if direct, ok := v.([]any); ok {
+		return direct, true
+	}
+	value := reflect.ValueOf(v)
+	if !value.IsValid() || (value.Kind() != reflect.Slice && value.Kind() != reflect.Array) {
+		return nil, false
+	}
+	// A []byte is data, not a list to walk into.
+	if value.Type().Elem().Kind() == reflect.Uint8 {
+		return nil, false
+	}
+	out := make([]any, 0, value.Len())
+	for i := 0; i < value.Len(); i++ {
+		out = append(out, value.Index(i).Interface())
+	}
+	return out, true
+}
+
 // RedactMap walks a configuration tree and withholds every secret in it.
 //
 // Nested maps are walked rather than stringified, because the configuration is
@@ -100,30 +154,29 @@ func redactURLCredentials(text string) (string, bool) {
 func RedactMap(in map[string]any) map[string]any {
 	out := make(map[string]any, len(in))
 	for key, value := range in {
-		switch typed := value.(type) {
-		case map[string]any:
-			if IsSecretKey(key) {
-				out[key] = Redacted
-				continue
-			}
-			out[key] = RedactMap(typed)
-		case []any:
-			if IsSecretKey(key) {
-				out[key] = Redacted
-				continue
-			}
-			items := make([]any, 0, len(typed))
-			for _, item := range typed {
-				if nested, ok := item.(map[string]any); ok {
-					items = append(items, RedactMap(nested))
+		if IsSecretKey(key) {
+			// Withheld whatever its shape: a secret key holding a map is
+			// still a secret, and recursing into it would report its parts.
+			out[key] = Redacted
+			continue
+		}
+		if nested, ok := asStringMap(value); ok {
+			out[key] = RedactMap(nested)
+			continue
+		}
+		if items, ok := asSlice(value); ok {
+			redacted := make([]any, 0, len(items))
+			for _, item := range items {
+				if nested, ok := asStringMap(item); ok {
+					redacted = append(redacted, RedactMap(nested))
 					continue
 				}
-				items = append(items, RedactValue(key, item))
+				redacted = append(redacted, RedactValue(key, item))
 			}
-			out[key] = items
-		default:
-			out[key] = RedactValue(key, value)
+			out[key] = redacted
+			continue
 		}
+		out[key] = RedactValue(key, value)
 	}
 	return out
 }

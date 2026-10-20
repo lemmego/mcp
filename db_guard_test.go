@@ -1,6 +1,10 @@
 package mcp
 
 import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
 	"strings"
 	"testing"
 )
@@ -124,5 +128,34 @@ func TestWithMaxRowsIgnoresNonsense(t *testing.T) {
 	WithMaxRows(10)(s)
 	if s.maxRows != 10 {
 		t.Errorf("maxRows = %d, want 10", s.maxRows)
+	}
+}
+
+// The usual way mcp:serve ends is the editor closing the pipe. The SDK reports
+// that as "server is closing: EOF" and cobra printed the flag usage for it, so
+// an ordinary shutdown looked like a usage mistake.
+func TestDisconnectIsNotAFailure(t *testing.T) {
+	disconnects := []error{
+		io.EOF,
+		fmt.Errorf("server is closing: %w", io.EOF),
+		errors.New("server is closing: EOF"),
+		context.Canceled,
+		errors.New("write |1: io: read/write on closed pipe"),
+	}
+	for _, err := range disconnects {
+		if !isDisconnect(err) {
+			t.Errorf("isDisconnect(%v) = false, want true", err)
+		}
+	}
+
+	// A real transport failure must still be reported.
+	real := []error{
+		errors.New("permission denied"),
+		errors.New("invalid JSON-RPC frame"),
+	}
+	for _, err := range real {
+		if isDisconnect(err) {
+			t.Errorf("isDisconnect(%v) = true, want false", err)
+		}
 	}
 }

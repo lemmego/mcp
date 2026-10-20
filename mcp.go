@@ -30,6 +30,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/lemmego/api/app"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -52,6 +53,10 @@ type Server struct {
 	// before falling back to the module cache, so a monorepo checkout reads
 	// the working tree rather than the last published copy.
 	moduleRoots []string
+
+	// routesOnce guards the one-time route materialisation. Per server rather
+	// than package-level, so two servers in one test do not share it.
+	routesOnce sync.Once
 
 	// maxRows bounds what a query may return. An agent asking for a whole
 	// table should get a bounded answer rather than filling its context with

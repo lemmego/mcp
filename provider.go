@@ -1,8 +1,12 @@
 package mcp
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
+	"strings"
 
 	"github.com/lemmego/api/app"
 	"github.com/spf13/cobra"
@@ -60,7 +64,17 @@ func (p *Provider) AddCommands() []app.Command {
 						fmt.Fprintln(os.Stderr, "lemmego mcp: writes are ENABLED; the agent can modify this database")
 					}
 
-					return New(a, options...).Serve(cmd.Context())
+					// SilenceUsage, because the usual way this command ends
+					// is the editor closing the pipe: the SDK reports that as
+					// "server is closing: EOF", cobra saw a non-nil error and
+					// printed the flag usage, and the operator was shown a
+					// usage message for an ordinary shutdown.
+					cmd.SilenceUsage = true
+					err := New(a, options...).Serve(cmd.Context())
+					if err != nil && isDisconnect(err) {
+						return nil
+					}
+					return err
 				},
 			}
 
@@ -73,4 +87,18 @@ func (p *Provider) AddCommands() []app.Command {
 			return cmd
 		},
 	}
+}
+
+// isDisconnect reports whether an error is the client having gone away, which
+// is how this command normally ends rather than a failure to report.
+//
+// Matched on the message because the SDK wraps io.EOF rather than returning it,
+// so errors.Is(err, io.EOF) does not hold. Narrow strings, so a real transport
+// failure is still reported.
+func isDisconnect(err error) bool {
+	if errors.Is(err, io.EOF) || errors.Is(err, context.Canceled) {
+		return true
+	}
+	message := err.Error()
+	return strings.Contains(message, "EOF") || strings.Contains(message, "closed pipe")
 }

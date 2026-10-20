@@ -151,3 +151,61 @@ func TestRedactDSNHandlesAnEmptyString(t *testing.T) {
 func renderTree(in map[string]any) string {
 	return fmt.Sprintf("%v", in)
 }
+
+// M mirrors config.M: a NAMED map type, which is how the real configuration is
+// built. A type switch on map[string]any does not match it, so the first
+// version of RedactMap walked none of the nested configuration and leaked
+// every secret below the top level.
+//
+// The bug survived a green suite because every test above used plain
+// map[string]any — the same idiom as the code. It was found by calling the tool
+// against a running application and reading the output, which is the only thing
+// that would have.
+type M map[string]any
+
+func TestRedactMapWalksNamedMapTypes(t *testing.T) {
+	in := M{
+		"sql": M{
+			"default": "pgsql",
+			"connections": M{
+				"pgsql": M{
+					"host":     "localhost",
+					"database": "appdb",
+					"password": "s3cr3t-pw",
+				},
+			},
+		},
+		"app": M{"key": "base64:APPKEYVALUE"},
+		"jwt": M{"secret": "jwt-signing-secret"},
+	}
+
+	rendered := renderTree(RedactMap(in))
+	for _, leaked := range []string{"s3cr3t-pw", "base64:APPKEYVALUE", "jwt-signing-secret"} {
+		if strings.Contains(rendered, leaked) {
+			t.Errorf("secret %q leaked through a named map type:\n%s", leaked, rendered)
+		}
+	}
+	// And the harmless parts still arrive, or the tool is useless.
+	for _, want := range []string{"localhost", "appdb", "pgsql"} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("redaction lost the useful value %q:\n%s", want, rendered)
+		}
+	}
+}
+
+// A secret key holding a map is still a secret; recursing into it would report
+// its parts.
+func TestRedactMapWithholdsASecretSubtreeWholesale(t *testing.T) {
+	out := RedactMap(M{"credentials": M{"user": "u", "password": "p"}})
+	if out["credentials"] != Redacted {
+		t.Errorf("a secret subtree was walked instead of withheld: %v", out["credentials"])
+	}
+}
+
+func TestRedactMapWalksNamedSliceTypes(t *testing.T) {
+	type list []any
+	out := RedactMap(M{"sources": list{M{"token": "leaked-token"}}})
+	if strings.Contains(renderTree(out), "leaked-token") {
+		t.Errorf("a secret leaked through a named slice type: %v", out)
+	}
+}
