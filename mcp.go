@@ -62,7 +62,22 @@ type Server struct {
 	// table should get a bounded answer rather than filling its context with
 	// one tool result.
 	maxRows int
+
+	// extra are tool registrars contributed by other modules.
+	//
+	// The dependency has to point this way. This server is the generic
+	// reporter and a module like observe is one subsystem, so importing it
+	// here to call its registrar would invert that — and would put every
+	// future subsystem's dependency tree into everybody's mcp build.
+	extra []Registrar
 }
+
+// Registrar adds tools to the server.
+//
+// A module that wants to answer questions over MCP exposes one of these and
+// an application passes it to New, so registerTools below stays a readable
+// catalogue of what this package itself provides.
+type Registrar func(*sdk.Server)
 
 // Option configures a Server.
 type Option func(*Server)
@@ -81,6 +96,16 @@ func WithWrites() Option {
 // code.
 func WithModuleRoots(paths ...string) Option {
 	return func(s *Server) { s.moduleRoots = append(s.moduleRoots, paths...) }
+}
+
+// WithTools contributes tools from another module.
+//
+//	mcp.New(a, mcp.WithTools(observemcp.Tools(recorder)))
+//
+// Each registrar is called once, after this package's own tools, so a
+// contributed tool cannot shadow one a reader would expect to find.
+func WithTools(registrars ...Registrar) Option {
+	return func(s *Server) { s.extra = append(s.extra, registrars...) }
 }
 
 // WithMaxRows bounds the rows a query may return. Zero or less restores the
@@ -149,6 +174,14 @@ func (s *Server) registerTools(server *sdk.Server) {
 
 	// What it has been told.
 	s.addRecordRule(server)
+
+	// And whatever another module contributes, last — so a contributed tool
+	// cannot shadow one above it.
+	for _, registrar := range s.extra {
+		if registrar != nil {
+			registrar(server)
+		}
+	}
 }
 
 // text is the shape every tool here returns: one block of text for the agent
