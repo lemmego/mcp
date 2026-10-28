@@ -191,7 +191,7 @@ Guidelines are short on purpose, because everything loaded upfront costs
 context on every single request. They carry the tool list and the handful of
 framework facts counter-intuitive enough to cause real damage: that provider
 order is load-bearing, that a 200 response proves nothing under Inertia, that
-a test suite skips silently without `APPTEST_POSTGRES_DSN`.
+a suite that skips and a suite that passes share an exit code.
 
 Skills ship only for the modules your project depends on, and cover the places
 an agent most often gets it wrong: `migration` (the schema builder's sharp

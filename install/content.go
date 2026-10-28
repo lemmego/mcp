@@ -94,8 +94,11 @@ docs site.
   back to client rendering when server-side rendering fails, so a broken page
   answers 200 and looks correct to a human while being empty to a crawler.
   Check for ` + "`data-server-rendered=\"true\"`" + ` in the body, not the status code.
-- **Tests that need Postgres skip silently without ` + "`APPTEST_POSTGRES_DSN`" + `** and the
-  package still exits 0. If a suite passes suspiciously fast, it did nothing.
+- **` + "`apptest.WithScratchDB()`" + ` takes its server from the application's own
+  configuration**, which under a test binary means ` + "`.env.test`" + `. There is no
+  environment variable naming a database, and it fails rather than skipping
+  when the server is unreachable — because a suite that skips and one that
+  passes are the same exit code.
 - **` + "`config.MustEnv`" + ` treats a variable that is present and empty as a decision**,
   and panics on a value it cannot parse. A stray ` + "`FOO=`" + ` line is not the same as an
   absent one.
@@ -192,11 +195,18 @@ When writing or debugging tests in a Lemmego project.
 ## The failure this project keeps hitting
 
 **A suite that skips is indistinguishable from one that passes in the exit
-code.** ` + "`apptest.WithPostgres()`" + ` skips when ` + "`APPTEST_POSTGRES_DSN`" + ` is unset, and the
-package still exits 0.
+code.** ` + "`apptest.WithScratchDB()`" + ` fails rather than skipping for exactly that
+reason, so an unreachable database is now loud — but the lesson generalises to
+every ` + "`t.Skip`" + ` in a suite.
 
 The giveaway is the runtime. If a package that boots the application finishes in
 a second, it did nothing. Check with ` + "`go test -v`" + ` and look for ` + "`--- SKIP`" + `.
+
+The server comes from ` + "`.env.test`" + `, not from an environment variable. Two ways
+to name a database is two things that can disagree, and they did: the old
+` + "`APPTEST_POSTGRES_DSN`" + ` supplied host, user, password and port but not options,
+so a managed URL's ` + "`sslmode=require`" + ` survived into a local server and every
+test panicked.
 
 ## Verify the probe, not just the test
 
