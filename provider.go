@@ -34,6 +34,7 @@ func (p *Provider) AddCommands() []app.Command {
 		func(a app.App) *cobra.Command {
 			var allowWrites bool
 			var moduleRoots []string
+			var docsRoots []string
 			var maxRows int
 
 			cmd := &cobra.Command{
@@ -51,6 +52,9 @@ func (p *Provider) AddCommands() []app.Command {
 					}
 					if len(moduleRoots) > 0 {
 						options = append(options, WithModuleRoots(moduleRoots...))
+					}
+					if len(docsRoots) > 0 {
+						options = append(options, WithDocsRoot(docsRoots...))
 					}
 					if maxRows > 0 {
 						options = append(options, WithMaxRows(maxRows))
@@ -81,7 +85,9 @@ func (p *Provider) AddCommands() []app.Command {
 			cmd.Flags().BoolVar(&allowWrites, "allow-writes", false,
 				"Let the agent run statements that modify data (off by default)")
 			cmd.Flags().StringSliceVar(&moduleRoots, "module-root", nil,
-				"Directory to search for module READMEs before the module cache; repeatable")
+				"Directory to search for module sources; repeatable")
+			cmd.Flags().StringSliceVar(&docsRoots, "docs-root", nil,
+				"Checkout of the documentation site to search; repeatable")
 			cmd.Flags().IntVar(&maxRows, "max-rows", 0,
 				"Maximum rows a query may return (default 100)")
 			return cmd

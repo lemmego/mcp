@@ -10,8 +10,8 @@
 //
 // So the two tools to reach for first are not the database ones. `module-api`
 // returns the real exported signatures of a lemmego module at the version this
-// project pins, and `search-docs` returns the module's own README. Everything
-// else here is context; those two are correction.
+// project pins, and `search-docs` returns the documentation site's pages.
+// Everything else here is context; those two are correction.
 //
 // # Safety
 //
@@ -53,6 +53,11 @@ type Server struct {
 	// before falling back to the module cache, so a monorepo checkout reads
 	// the working tree rather than the last published copy.
 	moduleRoots []string
+
+	// docsRoots are checkouts of the documentation site, searched before the
+	// siblings of the project directory, so an unpublished page is what gets
+	// read while it is being written.
+	docsRoots []string
 
 	// routesOnce guards the one-time route materialisation. Per server rather
 	// than package-level, so two servers in one test do not share it.
@@ -96,6 +101,13 @@ func WithWrites() Option {
 // code.
 func WithModuleRoots(paths ...string) Option {
 	return func(s *Server) { s.moduleRoots = append(s.moduleRoots, paths...) }
+}
+
+// WithDocsRoot adds a checkout of the documentation site to search, ahead of
+// anything found beside the project. Point it at the site, its content
+// directory or its docs directory — whichever you have.
+func WithDocsRoot(paths ...string) Option {
+	return func(s *Server) { s.docsRoots = append(s.docsRoots, paths...) }
 }
 
 // WithTools contributes tools from another module.

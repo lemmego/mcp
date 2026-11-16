@@ -67,9 +67,9 @@ version this project pins, read from the compiled package. Use it before calling
 anything you have not just read in this session. Hand-written documentation goes
 stale and invents functions that never existed; this cannot.
 
-` + "`search-docs`" + ` returns the modules' own READMEs, which are the authoritative
-specification for each module — ahead of any other documentation, including the
-docs site.
+` + "`search-docs`" + ` searches the documentation site — the same pages a reader sees
+at lemmego.github.io, written as tasks rather than as a specification. Use it for
+how to do something; use ` + "`module-api`" + ` for exact signatures.
 
 ### The other tools
 
@@ -129,7 +129,7 @@ vacuous test.
 // project that does not use payments carries no payment skill.
 //
 // Deliberately not one skill per module: a skill earns its place by holding
-// something an agent gets wrong, and for most modules the README plus
+// something an agent gets wrong, and for most modules the documentation plus
 // module-api is enough. These are the ones where this project has watched the
 // mistake happen.
 var skillTemplates = map[string]struct {

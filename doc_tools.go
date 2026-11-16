@@ -3,9 +3,11 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime/debug"
 	"strings"
 
@@ -118,12 +120,13 @@ func moduleVersion(pkg string) string {
 // --- search-docs ------------------------------------------------------------
 
 type searchDocsInput struct {
-	Query  string `json:"query" jsonschema:"what to look for"`
-	Module string `json:"module,omitempty" jsonschema:"restrict the search to one lemmego module"`
+	Query   string `json:"query" jsonschema:"what to look for"`
+	Section string `json:"section,omitempty" jsonschema:"restrict the search to one documentation section, e.g. observe or frontend"`
 }
 
 type docHit struct {
-	Module  string `json:"module"`
+	Page    string `json:"page"`
+	Title   string `json:"title"`
 	Heading string `json:"heading"`
 	Excerpt string `json:"excerpt"`
 }
@@ -135,10 +138,10 @@ type searchDocsOutput struct {
 func (s *Server) addSearchDocs(server *sdk.Server) {
 	sdk.AddTool(server, &sdk.Tool{
 		Name: "search-docs",
-		Description: "Search the lemmego modules' own READMEs, which are the authoritative " +
-			"specification for each module — ahead of any other documentation. Returns the " +
-			"matching sections. Use it for how a module is meant to be used and why; use " +
-			"module-api for exact signatures.",
+		Description: "Search the lemmego documentation site — the same pages a reader sees at " +
+			"lemmego.github.io, written as tasks rather than as a specification. Returns the " +
+			"matching sections. Use it for how to do something; use module-api for exact " +
+			"signatures.",
 	}, s.searchDocs)
 }
 
@@ -149,19 +152,21 @@ func (s *Server) searchDocs(_ context.Context, _ *sdk.CallToolRequest, in search
 	}
 	terms := strings.Fields(query)
 
-	readmes := s.findREADMEs(in.Module)
-	if len(readmes) == 0 {
-		return failure("found no module READMEs to search; point the server at a monorepo " +
-			"checkout with mcp.WithModuleRoots, or rely on module-api instead"), searchDocsOutput{}, nil
+	pages := s.findDocPages(in.Section)
+	if len(pages) == 0 {
+		return failure("found no documentation pages to search; point the server at a " +
+			"checkout of the docs site with mcp.WithDocsRoot, or rely on module-api " +
+			"instead"), searchDocsOutput{}, nil
 	}
 
 	var hits []docHit
-	for module, path := range readmes {
-		body, err := os.ReadFile(path)
+	for page, path := range pages {
+		raw, err := os.ReadFile(path)
 		if err != nil {
 			continue
 		}
-		for _, section := range splitSections(string(body)) {
+		title, body := splitFrontMatter(string(raw))
+		for _, section := range splitSections(stripShortcodes(body)) {
 			lower := strings.ToLower(section.heading + "\n" + section.body)
 			matched := 0
 			for _, term := range terms {
@@ -173,10 +178,15 @@ func (s *Server) searchDocs(_ context.Context, _ *sdk.CallToolRequest, in search
 			// scoring search would be better and needs an index; this is
 			// honest about being a grep.
 			if matched == len(terms) {
+				heading := section.heading
+				if heading == "(top)" && title != "" {
+					heading = title
+				}
 				hits = append(hits, docHit{
-					Module:  module,
-					Heading: section.heading,
-					Excerpt: truncate(section.body, 1200),
+					Page:    page,
+					Title:   title,
+					Heading: heading,
+					Excerpt: truncate(strings.TrimSpace(section.body), 1200),
 				})
 			}
 		}
@@ -185,59 +195,158 @@ func (s *Server) searchDocs(_ context.Context, _ *sdk.CallToolRequest, in search
 	out := searchDocsOutput{Hits: hits}
 	var b strings.Builder
 	if len(hits) == 0 {
-		fmt.Fprintf(&b, "nothing in %d module READMEs matched %q\n", len(readmes), in.Query)
+		fmt.Fprintf(&b, "nothing in %d documentation pages matched %q\n", len(pages), in.Query)
 		return text(b.String()), out, nil
 	}
 	fmt.Fprintf(&b, "%d section(s) matched %q:\n", len(hits), in.Query)
 	for _, hit := range hits {
-		fmt.Fprintf(&b, "\n--- %s — %s ---\n%s\n", hit.Module, hit.Heading, hit.Excerpt)
+		fmt.Fprintf(&b, "\n--- %s — %s ---\n%s\n", hit.Page, hit.Heading, hit.Excerpt)
 	}
 	return text(b.String()), out, nil
 }
 
-// findREADMEs locates each module's README, preferring a working-tree checkout
-// over the module cache so unreleased documentation is what gets read.
-func (s *Server) findREADMEs(only string) map[string]string {
+// findDocPages locates the documentation site's pages, keyed by the path a
+// reader would see — "observe", "frontend/inertia", "logging".
+//
+// The site is the source rather than the modules' READMEs: a README is the
+// module's specification and is written for whoever maintains it, where these
+// pages are written for somebody trying to get something working, which is
+// the question an agent is usually relaying.
+//
+// Roots are tried in order and the first copy of a page wins, so a working
+// tree is read ahead of anything else.
+func (s *Server) findDocPages(only string) map[string]string {
 	found := make(map[string]string)
 
-	roots := append([]string{}, s.moduleRoots...)
-	// The parent of the project directory, so a project inside a monorepo
-	// checkout finds its siblings without being configured.
-	if dir := projectDir(); dir != "" {
-		roots = append(roots, filepath.Dir(dir))
-	}
-
-	for _, root := range roots {
-		entries, err := os.ReadDir(root)
-		if err != nil {
-			continue
-		}
-		for _, entry := range entries {
-			if !entry.IsDir() {
-				continue
+	for _, root := range s.docsContentDirs() {
+		_ = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+			if err != nil || entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+				return nil
 			}
-			name := entry.Name()
-			if only != "" && name != strings.TrimPrefix(only, "lemmego/") {
-				continue
+			rel, relErr := filepath.Rel(root, path)
+			if relErr != nil {
+				return nil
 			}
-			if _, taken := found[name]; taken {
-				continue
+			// "observe/_index.md" is the section's own page, so it is named
+			// for the section rather than for the file nobody refers to.
+			page := strings.TrimSuffix(filepath.ToSlash(rel), ".md")
+			page = strings.TrimSuffix(page, "/_index")
+			if page == "_index" {
+				return nil // the docs landing page
 			}
-			readme := filepath.Join(root, name, "README.md")
-			if _, err := os.Stat(readme); err == nil {
-				found[name] = readme
+			if only != "" && page != only && !strings.HasPrefix(page, strings.TrimSuffix(only, "/")+"/") {
+				return nil
 			}
-		}
+			if _, taken := found[page]; !taken {
+				found[page] = path
+			}
+			return nil
+		})
 	}
 	return found
 }
+
+// docsContentDirs returns every documentation directory to search.
+//
+// A configured root may be the site, its content directory or the docs
+// directory itself, because all three are things somebody will reasonably
+// point at — so each root contributes the first of those that exists, and
+// only the first. Taking all three would accept the site root as well, and
+// every page would then be reported as "content/docs/…" rather than by the
+// path a reader would type.
+//
+// Configuring a root is exclusive: when you say where the documentation is,
+// nothing else is searched. Otherwise the siblings of the project directory
+// are searched for a checkout of the site, so a project inside the monorepo
+// finds it without being configured.
+func (s *Server) docsContentDirs() []string {
+	roots := s.docsRoots
+	if len(roots) == 0 {
+		if dir := projectDir(); dir != "" {
+			roots = []string{
+				filepath.Join(filepath.Dir(dir), docsSiteDir),
+				filepath.Join(dir, docsSiteDir),
+			}
+		}
+		for _, root := range s.moduleRoots {
+			roots = append(roots, filepath.Join(root, docsSiteDir))
+		}
+	}
+
+	var dirs []string
+	seen := make(map[string]bool)
+	for _, root := range roots {
+		for _, suffix := range []string{filepath.Join("content", "docs"), "docs", ""} {
+			dir := filepath.Clean(filepath.Join(root, suffix))
+			if seen[dir] || !holdsMarkdown(dir) {
+				continue
+			}
+			seen[dir] = true
+			dirs = append(dirs, dir)
+			break
+		}
+	}
+	return dirs
+}
+
+// docsSiteDir is the conventional directory name of the documentation site's
+// checkout, searched for beside the project.
+const docsSiteDir = "lemmego.github.io"
+
+// holdsMarkdown reports whether a directory has pages directly in it. A
+// directory holding only other directories is not accepted, so pointing at a
+// repository root does not turn its whole tree into documentation.
+func holdsMarkdown(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".md") {
+			return true
+		}
+	}
+	return false
+}
+
+// splitFrontMatter removes a page's YAML front matter and returns its title
+// with the body. A hit is reported under the title a reader would recognise,
+// not under the filename.
+func splitFrontMatter(body string) (title, rest string) {
+	if !strings.HasPrefix(body, "---\n") {
+		return "", body
+	}
+	end := strings.Index(body[4:], "\n---")
+	if end < 0 {
+		return "", body
+	}
+	header := body[4 : 4+end]
+	rest = strings.TrimPrefix(body[4+end+4:], "\n")
+
+	for _, line := range strings.Split(header, "\n") {
+		if value, ok := strings.CutPrefix(strings.TrimSpace(line), "title:"); ok {
+			title = strings.Trim(strings.TrimSpace(value), `"'`)
+			break
+		}
+	}
+	return title, rest
+}
+
+// stripShortcodes removes Hugo's {{< … >}} markers, keeping what they wrap.
+// A callout's text is part of the page; its delimiters are not, and leaving
+// them in means a search for "callout" matches every warning on the site.
+func stripShortcodes(body string) string {
+	return shortcodePattern.ReplaceAllString(body, "")
+}
+
+var shortcodePattern = regexp.MustCompile(`{{[<%]/?[^}]*[>%]}}`)
 
 type section struct {
 	heading string
 	body    string
 }
 
-// splitSections breaks a README at its markdown headings, so a hit can be
+// splitSections breaks a page at its markdown headings, so a hit can be
 // reported as the section it is in rather than as a line with no context.
 func splitSections(body string) []section {
 	lines := strings.Split(body, "\n")
