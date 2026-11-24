@@ -147,7 +147,7 @@ func TestGuidelinesPreserveEverythingOutsideTheBlock(t *testing.T) {
 // The guidelines are what an agent reads before it knows anything, so the two
 // tools that prevent invented APIs have to be in them.
 func TestGuidelinesLeadWithTheAPITools(t *testing.T) {
-	body := install.Guidelines([]string{"api", "orm"})
+	body := install.Guidelines(install.ClaudeCode, []string{"api", "orm"})
 	for _, want := range []string{"module-api", "search-docs", "list-routes", "record-rule"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the guidelines do not mention %q", want)
@@ -173,7 +173,7 @@ func TestSkillsFollowTheProjectsModules(t *testing.T) {
 
 	// The example go.mod has migration, apptest and inertia.
 	for _, name := range []string{"lemmego-migrations", "lemmego-testing", "lemmego-inertia"} {
-		path := filepath.Join(dir, ".ai", "skills", name, "SKILL.md")
+		path := filepath.Join(dir, ".claude", "skills", name, "SKILL.md")
 		body, err := os.ReadFile(path)
 		if err != nil {
 			t.Errorf("expected skill %s: %v", name, err)
@@ -199,7 +199,7 @@ func TestSkillsAreNotWrittenForAbsentModules(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, ".ai", "skills", "lemmego-migrations")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(dir, ".claude", "skills", "lemmego-migrations")); !os.IsNotExist(err) {
 		t.Error("a migrations skill was written for a project that does not use migration")
 	}
 }

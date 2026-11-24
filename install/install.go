@@ -56,6 +56,30 @@ func (a Agent) guidelineFile() string {
 	return "AGENTS.md"
 }
 
+// skillPath is where one on-demand skill file goes for this agent.
+//
+// This used to be .ai/skills/<name>/SKILL.md for every agent, and that path
+// is read by none of them. The skills were written, were never loaded, and
+// were not referenced from the guideline file either — so three carefully
+// written documents sat inert in every project that installed them. A skill
+// in the wrong directory is indistinguishable from a skill that was never
+// written.
+//
+// Claude Code discovers .claude/skills/<name>/SKILL.md. Cursor has no skill
+// concept but its rules are the same idea — a file with a description, loaded
+// when relevant rather than always — so a skill becomes a non-always-apply
+// .mdc rule. The AGENTS.md family has neither, so those keep .ai/skills and
+// rely on the reference the guideline file now carries.
+func (a Agent) skillPath(name string) string {
+	switch a {
+	case ClaudeCode:
+		return filepath.Join(".claude", "skills", name, "SKILL.md")
+	case Cursor:
+		return filepath.Join(".cursor", "rules", name+".mdc")
+	}
+	return filepath.Join(".ai", "skills", name, "SKILL.md")
+}
+
 // mcpConfigFile is where an agent looks for MCP server definitions.
 //
 // Several agents read the same .mcp.json, which is why the writer merges
@@ -153,14 +177,15 @@ func Run(opts Options) (Result, error) {
 				result.Skipped = append(result.Skipped, written)
 			}
 		}
-	}
 
-	if opts.Skills {
-		paths, err := writeSkills(opts.Dir, modules)
-		if err != nil {
-			return result, err
+		// Per agent, because each one reads skills from a different place.
+		if opts.Skills {
+			paths, err := writeSkills(opts.Dir, agent, modules)
+			if err != nil {
+				return result, err
+			}
+			result.Written = append(result.Written, paths...)
 		}
-		result.Written = append(result.Written, paths...)
 	}
 
 	if opts.Rules {
@@ -265,7 +290,7 @@ func writeGuidelines(dir string, agent Agent, modules []string) (string, bool, e
 		return rel, false, err
 	}
 
-	block := BeginMarker + "\n" + Guidelines(modules) + "\n" + EndMarker
+	block := BeginMarker + "\n" + Guidelines(agent, modules) + "\n" + EndMarker
 
 	existing, err := os.ReadFile(path)
 	if err != nil {

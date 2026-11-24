@@ -52,7 +52,7 @@ func ProjectModules(dir string) ([]string, error) {
 // doing: that the tools exist, which ones to reach for first, and the handful
 // of framework facts that are counter-intuitive enough to cause real damage.
 // Depth belongs in skills, which load on demand.
-func Guidelines(modules []string) string {
+func Guidelines(agent Agent, modules []string) string {
 	var b strings.Builder
 
 	b.WriteString(`## Lemmego
@@ -115,193 +115,79 @@ applied**, watch the test fail, then restore. A no-op patch reads exactly like a
 vacuous test.
 `)
 
+	if refs := skillRefs(agent, modules); len(refs) > 0 {
+		// Named explicitly rather than left to discovery. Claude Code does
+		// find .claude/skills on its own, but the previous version of this
+		// installer wrote skills to a path nothing reads and mentioned them
+		// nowhere, so three documents were inert in every project that had
+		// them. A pointer costs four lines and does not depend on the agent
+		// having a skill mechanism at all.
+		b.WriteString("\n### Deeper guidance, on demand\n\n")
+		b.WriteString("Read the matching file before doing one of these things. ")
+		b.WriteString("Each holds what this project has watched go wrong.\n\n")
+		b.WriteString("| Read this | Before |\n| --- | --- |\n")
+		for _, ref := range refs {
+			fmt.Fprintf(&b, "| `%s` | %s |\n", ref.path, ref.when)
+		}
+	}
+
+	b.WriteString("\n### Project rules\n\n")
+	b.WriteString("`" + rulesIndexPath + "` maps file globs to rules this project has " +
+		"recorded. Read it before planning or editing, and follow the row whose glob " +
+		"matches the file you are changing. It is empty until somebody uses " +
+		"`record-rule`, which is the tool to reach for when you are told something " +
+		"you would otherwise be told again.\n")
+
 	if len(modules) > 0 {
 		b.WriteString("\n### Modules this project depends on\n\n")
 		b.WriteString(strings.Join(modules, ", "))
 		b.WriteString("\n\nAsk `search-docs` or `module-api` about any of them.\n")
+		b.WriteString("\n**Before building any substantial feature, ask `list-modules`.** " +
+			"It lists every published module, including the ones this project does not " +
+			"require yet. `module-api` runs inside the project, so it reports an unused " +
+			"module as though it did not exist — and there are published modules for " +
+			"things people routinely rewrite by hand.\n")
 	}
 
 	return b.String()
 }
 
-// skillTemplates are the on-demand skills, keyed by the module that triggers
-// them. A skill is written only when the project depends on its module, so a
-// project that does not use payments carries no payment skill.
-//
-// Deliberately not one skill per module: a skill earns its place by holding
-// something an agent gets wrong, and for most modules the documentation plus
-// module-api is enough. These are the ones where this project has watched the
-// mistake happen.
-var skillTemplates = map[string]struct {
-	name        string
-	description string
-	body        string
-}{
-	"migration": {
-		name:        "lemmego-migrations",
-		description: "Write and run Lemmego migrations, including the schema builder's sharp edges on Postgres.",
-		body: `## When to use this skill
+// rulesIndexPath is where record-rule keeps its index. Duplicated from the
+// server's RulesDir rather than imported, because this package deliberately
+// depends on nothing — see the package doc — and a test asserts the two
+// agree.
+const rulesIndexPath = ".ai/rules/index.md"
 
-When adding, editing or rolling back a migration in a Lemmego project.
-
-## Check first
-
-Run ` + "`migration-status`" + ` before writing one. A version that collides with an
-applied migration will not run, and the collision is silent.
-
-## The schema builder's sharp edges on Postgres
-
-Each of these was found by shipping it, so prefer raw ` + "`tx.Exec`" + ` whenever the
-exact DDL matters:
-
-- **Multi-column index names carry no table prefix**, and Postgres index names
-  are schema-global — so two tables both wanting ` + "`(user_id, position)`" + ` collide
-  and the second fails the batch. Write multi-column indexes as raw SQL.
-- **` + "`Enum`" + ` emits no CHECK constraint at all** on Postgres, silently. Use
-  ` + "`String`" + ` plus a raw CHECK.
-- **` + "`ForeignID(col)`" + ` adds a BIGSERIAL**, giving the column its own sequence and
-  an implicit default. Use ` + "`UnsignedBigInt`" + ` plus ` + "`Foreign(col).References(...)`" + `.
-- **` + "`TimestampTz(name, p)`" + ` with p > 0 emits invalid SQL** — always pass 0.
-- **A database DEFAULT never applies through the ORM**, which names every mapped
-  column in its INSERT, so a ` + "`DEFAULT true`" + ` bool is written as Go's zero value.
-  Set it in ` + "`BeforeCreate`" + ` as well.
-
-## The whole batch is one transaction
-
-With a hardcoded 30s timeout, so ` + "`CREATE INDEX CONCURRENTLY`" + ` is impossible and
-the batch is all-or-nothing. Postgres DDL is transactional, so functions and
-triggers are fine.
-
-## Never migrate through a connection pooler
-
-` + "`migrate`" + ` resolves ` + "`--dsn`" + `, then ` + "`DATABASE_URL_UNPOOLED`" + `, then ` + "`DATABASE_URL`" + `, then the
-` + "`DB_*`" + ` parts. Managed providers publish a pooled URL and point you at it; under
-transaction pooling lib/pq's unnamed prepared statements fail intermittently as
-` + "`bind message supplies N parameters, but prepared statement \"\" requires M`" + `.
-
-## Verify reversibility
-
-Up, down, and up again on a throwaway database. That catches a down migration
-that leaves a table behind and an up that only works on an empty schema.
-`,
-	},
-	"apptest": {
-		name:        "lemmego-testing",
-		description: "Write tests for a Lemmego application with apptest, including the ways a suite can silently pass.",
-		body: `## When to use this skill
-
-When writing or debugging tests in a Lemmego project.
-
-## The failure this project keeps hitting
-
-**A suite that skips is indistinguishable from one that passes in the exit
-code.** ` + "`apptest.WithScratchDB()`" + ` fails rather than skipping for exactly that
-reason, so an unreachable database is now loud — but the lesson generalises to
-every ` + "`t.Skip`" + ` in a suite.
-
-The giveaway is the runtime. If a package that boots the application finishes in
-a second, it did nothing. Check with ` + "`go test -v`" + ` and look for ` + "`--- SKIP`" + `.
-
-The server comes from ` + "`.env.test`" + `, not from an environment variable. Two ways
-to name a database is two things that can disagree, and they did: the old
-` + "`APPTEST_POSTGRES_DSN`" + ` supplied host, user, password and port but not options,
-so a managed URL's ` + "`sslmode=require`" + ` survived into a local server and every
-test panicked.
-
-## Verify the probe, not just the test
-
-A new test is not trusted until it has been seen to fail:
-
-1. Revert the code the test protects.
-2. **Confirm the revert actually applied** — grep for it. A no-op patch reads
-   exactly like a vacuous test.
-3. Watch the test fail.
-4. Restore, and re-run.
-
-Real examples from this project: a test passed by asserting two identical
-redirects were identical; another exercised a helper that predated the feature;
-a third went through a code path that forced the value it was asserting on.
-
-## Asserting on rendered output
-
-Read the Inertia props rather than grepping the HTML. A page echoes its own
-query back, so a substring check against the body is true for any query whose
-text appears in a result. React also inserts ` + "`<!-- -->`" + ` between static text and an
-interpolated value, so ` + "`Continue with GitHub`" + ` is emitted as
-` + "`Continue with <!-- -->GitHub`" + ` and a naive match fails.
-
-## What the harness gives you
-
-A real boot with every provider, a request builder, Inertia assertions,
-` + "`ActingAs`" + `, a Postgres schema per test, and ` + "`Server()`" + `/` + "`Client()`" + ` when a test needs a
-real connection — ` + "`httptest.NewRecorder`" + ` cannot be hijacked, so a WebSocket
-upgrade fails and an SSE handler blocks forever without them.
-`,
-	},
-	"inertia": {
-		name:        "lemmego-inertia",
-		description: "Work with Inertia pages and server-side rendering in a Lemmego application.",
-		body: `## When to use this skill
-
-When adding or changing an Inertia page, or debugging a blank one.
-
-## A 200 proves nothing
-
-Inertia falls back to client rendering when the server-side render fails. The
-page answers **200 and looks perfect to a human** while a crawler receives an
-empty ` + "`<div id=\"app\">\"`" + `. Check the body for ` + "`data-server-rendered=\"true\"`" + ` and for
-real markup inside the container — not the status code.
-
-Outside production the SSR guard turns that into a 500 with the reason, which is
-why development is strict and production is not.
-
-## Never touch a browser global during render
-
-The renderer is Node: ` + "`window`" + `, ` + "`document`" + ` and ` + "`localStorage`" + ` all throw. A page that
-read ` + "`window.location.search`" + ` while rendering took down every request to it. Pass
-what you need as a prop, or read it in ` + "`useEffect`" + `, which never runs in the
-renderer.
-
-## The title is rendered in Go
-
-` + "`lemmego/seo`" + ` writes the real ` + "`<title>`" + ` server-side, so Inertia's ` + "`<Head title>`" + `
-emits a **second** one. Update the tab title in an effect instead.
-
-## Props and auth ordering
-
-Shared props are resolved before the route's own middleware, so an eagerly
-computed prop sees a signed-out viewer even for a signed-in person. Pass a
-` + "`func() any`" + ` closure so it resolves after auth.
-`,
-	},
+// skillRef is one skill as the guideline file advertises it.
+type skillRef struct {
+	path string
+	when string
 }
 
-// writeSkills writes one SKILL.md per relevant module.
-func writeSkills(dir string, modules []string) ([]string, error) {
+// skillRefs lists the skills this project will have, in a stable order.
+func skillRefs(agent Agent, modules []string) []skillRef {
 	present := map[string]bool{}
 	for _, module := range modules {
 		present[module] = true
 	}
-
-	var written []string
-	for module, skill := range skillTemplates {
-		if !present[module] {
+	var refs []skillRef
+	for _, module := range sortedKeys(skillTemplates) {
+		skill := skillTemplates[module]
+		if !present[module] && !skill.always {
 			continue
 		}
-		rel := filepath.Join(".ai", "skills", skill.name, "SKILL.md")
-		path := filepath.Join(dir, rel)
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			return nil, err
-		}
-		body := fmt.Sprintf("---\nname: %s\ndescription: %s\n---\n\n# %s\n\n%s",
-			skill.name, skill.description, skill.name, skill.body)
-		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
-			return nil, err
-		}
-		written = append(written, rel)
+		refs = append(refs, skillRef{path: agent.skillPath(skill.name), when: skill.when})
 	}
-	sort.Strings(written)
-	return written, nil
+	return refs
+}
+
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for key := range m {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // ServerWiring reports whether a project can actually serve MCP.
