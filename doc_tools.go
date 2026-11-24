@@ -11,6 +11,7 @@ import (
 	"runtime/debug"
 	"strings"
 
+	"github.com/lemmego/mcp/corpus"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -154,20 +155,30 @@ func (s *Server) searchDocs(_ context.Context, _ *sdk.CallToolRequest, in search
 
 	pages := s.findDocPages(in.Section)
 	if len(pages) == 0 {
-		return failure("found no documentation pages to search; point the server at a " +
-			"checkout of the docs site with mcp.WithDocsRoot, or rely on module-api " +
-			"instead"), searchDocsOutput{}, nil
+		if section := strings.TrimSpace(in.Section); section != "" {
+			return failure("no documentation section named %q; omit section to search "+
+				"all of it", section), searchDocsOutput{}, nil
+		}
+		// Not reachable through a normal build, because the snapshot is
+		// compiled in and a test refuses an empty one. Kept so that a build
+		// which somehow has neither says why instead of reporting no matches.
+		return failure("found no documentation pages to search"), searchDocsOutput{}, nil
 	}
 
 	var hits []docHit
-	for page, path := range pages {
-		raw, err := os.ReadFile(path)
+	for name, page := range pages {
+		raw, err := fs.ReadFile(page.fsys, page.path)
 		if err != nil {
 			continue
 		}
 		title, body := splitFrontMatter(string(raw))
 		for _, section := range splitSections(stripShortcodes(body)) {
-			lower := strings.ToLower(section.heading + "\n" + section.body)
+			// The title is part of what a section matches, not just what the
+			// hit is labelled with. Without it a page called "Multi-tenancy"
+			// is not found by searching for multi-tenancy — the one phrase
+			// somebody looking for that page would type — because the words
+			// appear in the front matter and nowhere in the prose.
+			lower := strings.ToLower(title + "\n" + section.heading + "\n" + section.body)
 			matched := 0
 			for _, term := range terms {
 				if strings.Contains(lower, term) {
@@ -183,7 +194,7 @@ func (s *Server) searchDocs(_ context.Context, _ *sdk.CallToolRequest, in search
 					heading = title
 				}
 				hits = append(hits, docHit{
-					Page:    page,
+					Page:    name,
 					Title:   title,
 					Heading: heading,
 					Excerpt: truncate(strings.TrimSpace(section.body), 1200),
@@ -198,11 +209,28 @@ func (s *Server) searchDocs(_ context.Context, _ *sdk.CallToolRequest, in search
 		fmt.Fprintf(&b, "nothing in %d documentation pages matched %q\n", len(pages), in.Query)
 		return text(b.String()), out, nil
 	}
-	fmt.Fprintf(&b, "%d section(s) matched %q:\n", len(hits), in.Query)
+	fmt.Fprintf(&b, "%d section(s) matched %q", len(hits), in.Query)
+	// Say which documentation this is. An agent that reads a page describing a
+	// function the pinned version does not have should be able to tell that
+	// is what happened, and a reader of the transcript should see whether the
+	// answer came from a working tree or from the release.
+	if len(s.docsContentDirs()) == 0 {
+		fmt.Fprintf(&b, " (embedded documentation: %s)", corpus.Provenance())
+	} else {
+		fmt.Fprintf(&b, " (from %s)", strings.Join(s.docsContentDirs(), ", "))
+	}
+	b.WriteString(":\n")
 	for _, hit := range hits {
 		fmt.Fprintf(&b, "\n--- %s — %s ---\n%s\n", hit.Page, hit.Heading, hit.Excerpt)
 	}
 	return text(b.String()), out, nil
+}
+
+// docPage is one page and the filesystem it came from, so a checkout on disk
+// and the compiled-in snapshot can be walked by the same code.
+type docPage struct {
+	fsys fs.FS
+	path string
 }
 
 // findDocPages locates the documentation site's pages, keyed by the path a
@@ -214,22 +242,19 @@ func (s *Server) searchDocs(_ context.Context, _ *sdk.CallToolRequest, in search
 // the question an agent is usually relaying.
 //
 // Roots are tried in order and the first copy of a page wins, so a working
-// tree is read ahead of anything else.
-func (s *Server) findDocPages(only string) map[string]string {
-	found := make(map[string]string)
+// tree is read ahead of anything else and the compiled-in snapshot is read
+// only where nothing else has that page.
+func (s *Server) findDocPages(only string) map[string]docPage {
+	found := make(map[string]docPage)
 
-	for _, root := range s.docsContentDirs() {
-		_ = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+	for _, root := range s.docsRootFS() {
+		_ = fs.WalkDir(root, ".", func(path string, entry fs.DirEntry, err error) error {
 			if err != nil || entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
-				return nil
-			}
-			rel, relErr := filepath.Rel(root, path)
-			if relErr != nil {
 				return nil
 			}
 			// "observe/_index.md" is the section's own page, so it is named
 			// for the section rather than for the file nobody refers to.
-			page := strings.TrimSuffix(filepath.ToSlash(rel), ".md")
+			page := strings.TrimSuffix(path, ".md")
 			page = strings.TrimSuffix(page, "/_index")
 			if page == "_index" {
 				return nil // the docs landing page
@@ -238,7 +263,7 @@ func (s *Server) findDocPages(only string) map[string]string {
 				return nil
 			}
 			if _, taken := found[page]; !taken {
-				found[page] = path
+				found[page] = docPage{fsys: root, path: path}
 			}
 			return nil
 		})
@@ -246,32 +271,50 @@ func (s *Server) findDocPages(only string) map[string]string {
 	return found
 }
 
-// docsContentDirs returns every documentation directory to search.
+// docsRootFS returns the documentation tree to search.
 //
-// A configured root may be the site, its content directory or the docs
-// directory itself, because all three are things somebody will reasonably
-// point at — so each root contributes the first of those that exists, and
-// only the first. Taking all three would accept the site root as well, and
-// every page would then be reported as "content/docs/…" rather than by the
-// path a reader would type.
+// Exactly one of two things: the directories somebody named with
+// WithDocsRoot, or the snapshot compiled into the binary. Naming a root is
+// exclusive — if you say where the documentation is, that is where it is read
+// from, and a page missing there is missing rather than quietly answered from
+// a copy of a different vintage. Mixing the two was the first thing I wrote
+// here and it is worse: a hit's text and its version would depend on which
+// tree happened to hold that page.
 //
-// Configuring a root is exclusive: when you say where the documentation is,
-// nothing else is searched. Otherwise the siblings of the project directory
-// are searched for a checkout of the site, so a project inside the monorepo
-// finds it without being configured.
+// Which means the default — no roots named, which is every generated project
+// — is the snapshot, and that is the fix. The previous default was to guess
+// at a checkout beside the project directory and, finding none, answer
+// nothing.
+func (s *Server) docsRootFS() []fs.FS {
+	dirs := s.docsContentDirs()
+	if len(dirs) == 0 {
+		return []fs.FS{corpus.Docs()}
+	}
+	roots := make([]fs.FS, 0, len(dirs))
+	for _, dir := range dirs {
+		roots = append(roots, os.DirFS(dir))
+	}
+	return roots
+}
+
+// docsContentDirs returns the documentation directories on disk to search,
+// which is nothing at all unless somebody asked for one with WithDocsRoot.
+//
+// This used to guess: it looked for a checkout of the site beside the project
+// directory and read that. The guess is gone, because it was indistinguishable
+// from magic — whether the tool answered depended on what happened to be in
+// the parent directory — and because it was the *only* source, which meant
+// every project that was not a sibling of the documentation repository got no
+// documentation at all. The snapshot covers that case properly now, so a
+// directory is read only when it is named.
+//
+// A named root may be the site, its content directory or the docs directory
+// itself, because all three are things somebody will reasonably point at — so
+// each contributes the first of those that exists, and only the first. Taking
+// all three would accept the site root as well, and every page would then be
+// reported as "content/docs/…" rather than by the path a reader would type.
 func (s *Server) docsContentDirs() []string {
 	roots := s.docsRoots
-	if len(roots) == 0 {
-		if dir := projectDir(); dir != "" {
-			roots = []string{
-				filepath.Join(filepath.Dir(dir), docsSiteDir),
-				filepath.Join(dir, docsSiteDir),
-			}
-		}
-		for _, root := range s.moduleRoots {
-			roots = append(roots, filepath.Join(root, docsSiteDir))
-		}
-	}
 
 	var dirs []string
 	seen := make(map[string]bool)

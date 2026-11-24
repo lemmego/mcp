@@ -138,17 +138,102 @@ func TestSearchDocsRequiresEveryTerm(t *testing.T) {
 
 // With nothing to search the tool says so, rather than reporting an empty
 // result that reads as "the documentation does not mention it".
-func TestSearchDocsSaysWhenThereIsNothingToSearch(t *testing.T) {
+// A configured root holding no pages is the same as configuring nothing, and
+// the compiled-in snapshot answers.
+//
+// This used to be TestSearchDocsSaysWhenThereIsNothingToSearch, and the
+// behaviour it asserted — an error naming the missing documentation — was the
+// bug rather than the feature. There was no snapshot, so "nothing to search"
+// was the answer every project outside the monorepo got for every query.
+func TestSearchDocsFallsBackToTheSnapshot(t *testing.T) {
 	s := &Server{docsRoots: []string{t.TempDir()}}
 
-	result, out, err := s.searchDocs(context.Background(), nil, searchDocsInput{Query: "anything"})
+	result, out, err := s.searchDocs(context.Background(), nil, searchDocsInput{Query: "middleware"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(out.Hits) != 0 {
-		t.Fatalf("want no hits, got %d", len(out.Hits))
+	if result != nil && result.IsError {
+		t.Fatal("want an answer from the snapshot, got an error result")
 	}
-	if result == nil || !result.IsError {
-		t.Error("want an error result naming the missing documentation")
+	if len(out.Hits) == 0 {
+		t.Fatal("want hits from the embedded snapshot, got none")
+	}
+}
+
+// The default — no root configured at all, which is every generated project —
+// answers from the snapshot.
+//
+// This is the whole point of embedding it. Before, findDocPages guessed at a
+// checkout beside the working directory; a project that was not a sibling of
+// the documentation repository got zero pages, so the tool the package
+// documentation calls "correction" rather than "context" failed for everybody
+// who had not cloned the framework.
+func TestSearchDocsAnswersWithNoCheckoutAnywhere(t *testing.T) {
+	dir := t.TempDir()
+	old, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(old) })
+
+	s := &Server{}
+	if n := len(s.docsContentDirs()); n != 0 {
+		t.Fatalf("want no directories on disk, got %d", n)
+	}
+
+	out := search(t, s, searchDocsInput{Query: "request lifecycle"})
+	if len(out.Hits) == 0 {
+		t.Fatal("no hits from the snapshot: search-docs is answering nothing, " +
+			"which is the state this snapshot exists to fix")
+	}
+}
+
+// A named checkout is read instead of the snapshot, so editing a page takes
+// effect immediately rather than at the next release.
+func TestANamedCheckoutIsReadInsteadOfTheSnapshot(t *testing.T) {
+	root := t.TempDir()
+	// Same page path the real site uses, with text the snapshot cannot hold.
+	if err := os.WriteFile(filepath.Join(root, "logging.md"),
+		[]byte("---\ntitle: Logging\n---\n\n## Rotation\n\nzarquon beeblebrox\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{docsRoots: []string{root}}
+
+	out := search(t, s, searchDocsInput{Query: "zarquon"})
+	if len(out.Hits) != 1 {
+		t.Fatalf("want the working tree's page, got %d hits", len(out.Hits))
+	}
+
+	// And the snapshot is not also searched, or a query only it can satisfy
+	// would still match.
+	if hits := search(t, s, searchDocsInput{Query: "request lifecycle"}).Hits; len(hits) != 0 {
+		t.Errorf("the snapshot was searched as well as the named root: %d hits", len(hits))
+	}
+}
+
+// A page is findable by its title, which is usually the phrase somebody
+// searching for it would type.
+//
+// The title lives in front matter, so it is not in the body text a section
+// search scans. A page titled "Multi-tenancy" whose prose says "tenant"
+// throughout matched nothing for "multi-tenancy".
+func TestSearchDocsMatchesOnTheTitle(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "widgets.md"),
+		[]byte("---\ntitle: Zarquon Handling\n---\n\n## Rotation\n\nNothing here repeats the title.\n"),
+		0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{docsRoots: []string{root}}
+
+	out := search(t, s, searchDocsInput{Query: "zarquon handling"})
+	if len(out.Hits) == 0 {
+		t.Fatal("a page is not findable by its own title")
+	}
+	if got := out.Hits[0].Title; got != "Zarquon Handling" {
+		t.Errorf("title = %q", got)
 	}
 }
