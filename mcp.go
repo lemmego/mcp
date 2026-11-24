@@ -166,6 +166,7 @@ func (s *Server) registerTools(server *sdk.Server) {
 	// Correction first — see the package doc.
 	s.addModuleAPI(server)
 	s.addSearchDocs(server)
+	s.addListModules(server)
 
 	// What this application is.
 	s.addAppInfo(server)

@@ -22,9 +22,17 @@ So the two tools to reach for first are not the database ones:
 | Tool | What it does |
 | --- | --- |
 | **`module-api`** | The **real** exported signatures of a lemmego module at the version your project pins, read from the compiled package via `go doc`. Prose can go stale and invent functions; this cannot. |
-| **`search-docs`** | The modules' own READMEs, which are the authoritative spec for each module. |
+| **`search-docs`** | The documentation site's pages, compiled into this server so they are there whether or not you have a checkout. |
+| **`list-modules`** | Every module the ecosystem publishes, including the ones your `go.mod` does not mention yet. |
 
-Everything else is context. Those two are correction.
+Everything else is context. Those three are correction.
+
+`list-modules` is there because the other two cannot answer it. `module-api`
+runs `go doc` inside your project, so a module you have not added comes back as
+`no required module provides package …` — which an agent reads as "that does
+not exist" and then writes from scratch beside a published module that already
+does it. There are modules for multi-tenancy, roles and permissions, an OAuth2
+server, translation, search and billing.
 
 ## All tools
 
@@ -43,6 +51,7 @@ Everything else is context. Those two are correction.
 | `health` | The registered health checks and each result |
 | `read-log-entries` | Recent log lines, filterable, from the most recently written file |
 | `last-error` | The most recent error-level entry — start a debugging loop here |
+| `list-modules` | Every published module, what it is for, and how to add the ones this project lacks |
 | `record-rule` | File a durable project rule under `.ai/rules` and rebuild its index |
 
 ### Limitations
@@ -208,3 +217,27 @@ GOWORK=off go mod tidy && GOWORK=off go test ./...
 The dependency guard in `install/` is the one to watch: it asserts the
 installer reaches nothing outside the standard library, which is the whole
 reason that package split exists.
+
+## The documentation it answers from
+
+`search-docs` reads a snapshot of the documentation site compiled into this
+server, so it works in any project. Point it at a checkout instead when you are
+editing the docs:
+
+```shell
+lemmego run mcp:serve --docs-root ../lemmego.github.io
+```
+
+Naming a root is exclusive — that tree is what gets searched, so an unpublished
+page is what you see rather than the released copy.
+
+Refresh the snapshot after changing the documentation:
+
+```shell
+go run ./corpus/syncdocs ../lemmego.github.io
+```
+
+`TestCorpusMatchesTheSite` fails in a tree holding both repositories when that
+has not been run. Each answer names which documentation it came from, so a
+transcript shows whether a page was read from a working tree or from the
+release.
