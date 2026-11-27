@@ -51,4 +51,5 @@ All frontend approaches work with the Vite asset pipeline for bundling JavaScrip
 {{< card link="templ" title="Templ" subtitle="Type-safe Go templates" >}}
 {{< card link="inertia" title="Inertia.js" subtitle="Modern SPA with React or Vue" >}}
 {{< card link="vite" title="Vite Integration" subtitle="Asset pipeline and HMR" >}}
+{{< card link="mobile-contributions" title="Mobile Module Contributions" subtitle="Keep optional native workflows with their Go module" >}}
 {{< /cards >}}

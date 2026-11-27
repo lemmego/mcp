@@ -286,9 +286,11 @@ if err := v.Validate(); err != nil {
 ```go
 file, err := c.Upload("avatar", "avatars")
 // Saves the uploaded file to the configured storage disk
-// Returns the created file
+// Returns the created file. The framework assigns a random name with a suffix
+// derived from the detected content type.
 
 // With custom filename:
+// Use a server-selected name; do not copy the client's multipart filename.
 file, err := c.Upload("avatar", "avatars", "custom-name.jpg")
 ```
 

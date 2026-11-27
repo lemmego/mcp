@@ -37,7 +37,7 @@ import (
 )
 
 // Version is reported to the client in the server handshake.
-const Version = "0.1.0"
+const Version = "0.7.0"
 
 // Server serves one application's state.
 type Server struct {
@@ -167,6 +167,7 @@ func (s *Server) registerTools(server *sdk.Server) {
 	s.addModuleAPI(server)
 	s.addSearchDocs(server)
 	s.addListModules(server)
+	s.addReviewCode(server)
 
 	// What this application is.
 	s.addAppInfo(server)

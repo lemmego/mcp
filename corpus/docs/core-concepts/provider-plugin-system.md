@@ -155,6 +155,21 @@ func LoadProviders() []app.Provider {
 }
 ```
 
+## Native app contributions
+
+An optional feature that ships a native mobile workflow can keep its screens
+with its Go module. Add a `lemmego.mobile.json` at the module root, name the
+mobile entry and routes, and list the permissions and native configuration it
+needs. `lemmego mobile sync` discovers these manifests from the packages in
+`go list -deps -json ./cmd/app` and writes `.lemmego/mobile.generated.json`.
+
+This is a build-time contribution contract, not a runtime dependency on the
+CLI. A module absent from the server's Go build is absent from the generated
+mobile manifest as well. The host app can then bundle its SaaS module set or
+the selected on-premise modules without maintaining a second catalog. The
+host app still owns authentication, bootstrap, persistence, and shared
+navigation; the module owns its workflow screen implementation.
+
 ## Built-in Providers
 
 | Provider | Package | Purpose |

@@ -244,7 +244,10 @@ func Upload(c app.Context) error {
 }
 ```
 
-Parameters: the form field name, target directory, and an optional custom filename.
+Parameters: the form field name, target directory, and an optional server-selected
+filename. When omitted, the framework generates a random filename and uses the
+detected content type to choose its suffix. Never pass the client's multipart
+filename as the custom filename.
 
 ## Next steps
 

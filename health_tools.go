@@ -26,6 +26,11 @@ func (s *Server) addHealth(server *sdk.Server) {
 }
 
 func (s *Server) health(ctx context.Context, _ *sdk.CallToolRequest, _ emptyInput) (*sdk.CallToolResult, healthOutput, error) {
+	// Applications commonly register health checks from a route callback.
+	// mcp:serve is a console command, so those callbacks have not run until
+	// something materialises the route table.
+	s.materialiseRouteTable()
+
 	checker := s.app.GetHealthChecker()
 	if checker == nil {
 		return failure("this application has no health checker"), healthOutput{}, nil
